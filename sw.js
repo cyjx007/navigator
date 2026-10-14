@@ -1,144 +1,81 @@
 /**
- * Service Worker for Navigation Page Caching
- * 为不同类型的资源设置不同的缓存策略
+ * Service Worker - 导航页面缓存
+ * v7: 同源资源 Network First，并强制绕过浏览器 HTTP 缓存（cache: 'no-cache'），
+ *     确保改完代码刷新就能看到最新版；离线时回退 Cache Storage。
+ *     跨域请求（含识图上传）一律不拦截，避免影响 Google Lens 提交。
  */
 
-const CACHE_NAME = 'nav-cache-v1';
-const STATIC_CACHE_NAME = 'nav-static-v1';
+const CACHE_NAME = 'nav-cache-v7';
 
-// 需要缓存的静态资源
+// 需要预缓存的静态资源（相对路径，兼容子目录部署）
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/app.js',
-  '/main.js',
-  '/style.css'
+  './',
+  './index.html',
+  './app.js',
+  './main.js',
+  './style.css',
+  './manifest.json'
 ];
 
-// 检查是否为静态资源
-function isStaticAsset(url) {
-  const staticPaths = ['/', '/index.html', '/app.js', '/main.js', '/style.css', '/sw.js'];
-  return staticPaths.some(path => url.endsWith(path));
-}
-
-// 检查是否为API请求
-function isApiRequest(url) {
-  return url.includes('/api/');
-}
-
-// Cache First 策略：优先从缓存获取，缓存不存在时从网络获取
-async function cacheFirstStrategy(request) {
+// Network First：优先网络，失败回退缓存
+async function networkFirst(request) {
+  const cache = await caches.open(CACHE_NAME);
   try {
-    const cachedResponse = await caches.match(request);
-    if (cachedResponse) {
-      console.log('Cache First - Serving from cache:', request.url);
-      return cachedResponse;
+    // cache: 'no-cache' 会绕过浏览器 HTTP 缓存并强制向服务器校验，
+    // 避免「改了代码但刷新还是旧版」
+    let response;
+    try {
+      response = await fetch(request, { cache: 'no-cache' });
+    } catch (e) {
+      response = await fetch(request);
     }
-
-    const networkResponse = await fetch(request);
-    if (networkResponse.ok) {
-      // 缓存成功的响应
-      const cache = await caches.open(STATIC_CACHE_NAME);
-      cache.put(request, networkResponse.clone());
-      console.log('Cache First - Added to cache:', request.url);
+    if (response && response.ok) {
+      cache.put(request, response.clone());
     }
-    return networkResponse;
+    return response;
   } catch (error) {
-    console.log('Cache First - Fetch failed:', error);
+    const cached = await cache.match(request);
+    if (cached) return cached;
     throw error;
   }
 }
 
-// Network First 策略：优先从网络获取，网络失败时从缓存获取
-async function networkFirstStrategy(request) {
-  try {
-    const networkResponse = await fetch(request);
-    if (networkResponse.ok) {
-      // 缓存成功的响应
-      const cache = await caches.open(CACHE_NAME);
-      cache.put(request, networkResponse.clone());
-      console.log('Network First - Serving from network and cached:', request.url);
-    }
-    return networkResponse;
-  } catch (error) {
-    console.log('Network First - Network failed, trying cache:', request.url);
-    const cachedResponse = await caches.match(request);
-    if (cachedResponse) {
-      console.log('Network First - Serving from cache:', request.url);
-      return cachedResponse;
-    }
-    throw error;
-  }
-}
-
-// 安装 Service Worker
+// 安装
 self.addEventListener('install', event => {
-  console.log('Service Worker installing...');
   event.waitUntil(
-    caches.open(STATIC_CACHE_NAME)
-      .then(cache => {
-        console.log('Caching static assets...');
-        return cache.addAll(STATIC_ASSETS);
-      })
-      .then(() => {
-        console.log('Service Worker installed and static assets cached');
-        // 强制激活新的 Service Worker
-        return self.skipWaiting();
-      })
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(STATIC_ASSETS))
+      .then(() => self.skipWaiting())
   );
 });
 
-// 激活 Service Worker
+// 激活：清理所有旧版本缓存
 self.addEventListener('activate', event => {
-  console.log('Service Worker activating...');
   event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
-        cacheNames.map(cacheName => {
-          // 删除旧版本的缓存
-          if (cacheName !== STATIC_CACHE_NAME && cacheName !== CACHE_NAME) {
-            console.log('Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
-    .then(() => {
-      console.log('Service Worker activated');
-      // 立即控制所有客户端
-      return self.clients.claim();
-    })
+    caches.keys()
+      .then(names => Promise.all(names.map(n => (n !== CACHE_NAME ? caches.delete(n) : null))))
+      .then(() => self.clients.claim())
   );
 });
 
-// 处理请求
+// 请求处理
 self.addEventListener('fetch', event => {
-  // 只处理 GET 请求
-  if (event.request.method !== 'GET') {
-    return;
-  }
+  const req = event.request;
 
-  // 跳过非 HTTP 请求（如 chrome-extension://）
-  if (!event.request.url.startsWith('http')) {
-    return;
-  }
+  // 只处理 GET
+  if (req.method !== 'GET') return;
+  if (!req.url.startsWith('http')) return;
 
-  const url = new URL(event.request.url);
+  const url = new URL(req.url);
 
-  // 根据请求类型选择不同的缓存策略
-  if (isApiRequest(url.pathname)) {
-    // API请求使用Network First策略
-    event.respondWith(networkFirstStrategy(event.request));
-  } else if (isStaticAsset(url.pathname)) {
-    // 静态资源使用Cache First策略
-    event.respondWith(cacheFirstStrategy(event.request));
-  } else {
-    // 其他请求使用默认策略（可以根据需要调整）
-    event.respondWith(cacheFirstStrategy(event.request));
-  }
+  // 跨域请求（favicon、图片等）直接放行，不拦截、不缓存
+  if (url.origin !== self.location.origin) return;
+
+  // 同源请求：网络优先，离线回退缓存
+  event.respondWith(networkFirst(req));
 });
 
-// 处理消息
+// 消息处理：支持页面主动触发更新
 self.addEventListener('message', event => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
