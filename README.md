@@ -280,9 +280,13 @@ Worker 提供的接口：
 
 - 静态资源统一带 `?v=` 版本号
 - `sw.js` 分流：**HTML 走 Network First**（部署后立刻换新），**带 `?v=` 的资源走 Stale While Revalidate**（秒开，后台更新）
-- `_headers` 给带版本号的资源加长缓存（7 天 + `stale-while-revalidate`），HTML 保持每次校验
 - 跨域请求（含识图上传）一律不拦截，避免干扰 Google Lens 提交
 - 设置面板提供 **「强制刷新」**：注销 SW + 清空 Cache Storage + 带时间戳重载
+
+> 为什么 `_headers` 里不写 `Cache-Control`：Cloudflare 给静态资源默认下发
+> `public, max-age=0, must-revalidate`，而 `_headers` 是**追加**而不是覆盖，
+> 写进去会变成两段 max-age 拼在一起（浏览器按第一个算，等于没生效）。
+> 真正的「重复访问秒开」由 SW 的 stale-while-revalidate 负责，不依赖平台行为。
 
 ### 拼音首字母表是怎么来的
 
@@ -380,7 +384,7 @@ v2.2.1 已修复：旧版兜底逻辑会额外 `window.open` 或把弹窗跳转�
 - **Worker 升级（`worker/nav-api.js`）**：`NAV_TOKEN` 鉴权、Token 派生数据分区（多份数据互不干扰）、
   `/icon` 图标代理（KV 缓存 30 天）、`/api/health`；没设 Token 时自动退回旧行为，升级不中断
 - **性能**：`app.js` 加 `defer`（不再阻塞首屏）；SW 分流为「HTML 网络优先 + 版本化资源 stale-while-revalidate」；
-  新增 `_headers` 给版本化资源加长缓存并补 `nosniff` / `Referrer-Policy`
+  新增 `_headers` 补 `nosniff` / `Referrer-Policy`
 - **安全**：图标代理只向固定公共源取图、拒绝 IP / localhost，避免被当 SSRF 跳板；数据接口限制 2MB 与 JSON 校验
 
 ### v2.2.2
