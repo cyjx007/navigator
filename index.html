@@ -9,14 +9,25 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>导航</title>
 
+    <script>
+        // 首屏渲染前先定好主题，避免深色模式下先白闪一下
+        (function () {
+            try {
+                if (localStorage.getItem('nav_theme') === 'dark') {
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                }
+            } catch (e) { /* 隐私模式禁用 localStorage 时忽略 */ }
+        })();
+    </script>
+
     <!-- SVG Favicon -->
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/%3E%3C/svg%3E" type="image/svg+xml">
 
     <!-- 资源统一带版本号，避免旧缓存导致改动不生效 -->
-    <link href="style.css?v=2.2.1" rel="stylesheet" type="text/css">
+    <link href="style.css?v=2.2.2" rel="stylesheet" type="text/css">
     <link rel="manifest" href="manifest.json">
 
-    <script src="app.js?v=2.2.1"></script>
+    <script src="app.js?v=2.2.2"></script>
     <script>
         // 注册 Service Worker（相对路径，兼容子目录部署）
         if ('serviceWorker' in navigator) {
@@ -63,17 +74,17 @@
                 <span class="nav-header__clock" id="headerClock"></span>
             </div>
             <div class="nav-header__actions">
-                <div class="nav-header__btn" id="themeToggleBtn" title="切换深浅模式">🌙</div>
-                <div class="nav-header__btn nav-header__btn--ghost" id="collapseAllBtn" title="一键折叠 / 展开所有分类">折叠全部</div>
-                <div class="nav-header__btn" id="categoryManageBtn">分类管理</div>
-                <div class="nav-header__btn" id="addLinkBtn">增加链接</div>
-                <div class="nav-header__btn" id="settingsBtn">设置</div>
+                <div class="nav-header__btn" id="themeToggleBtn" role="button" tabindex="0" title="切换深浅模式" aria-label="切换深浅模式">🌙</div>
+                <div class="nav-header__btn nav-header__btn--ghost" id="collapseAllBtn" role="button" tabindex="0" title="一键折叠 / 展开所有分类">折叠全部</div>
+                <div class="nav-header__btn" id="categoryManageBtn" role="button" tabindex="0">分类管理</div>
+                <div class="nav-header__btn" id="addLinkBtn" role="button" tabindex="0">增加链接</div>
+                <div class="nav-header__btn" id="settingsBtn" role="button" tabindex="0">设置</div>
             </div>
         </div>
     </div>
 
-    <!-- ===== Toast 通知容器 ===== -->
-    <div class="toast-container" id="toastContainer"></div>
+    <!-- ===== Toast 通知容器（底部居中，读屏会播报）===== -->
+    <div class="toast-container" id="toastContainer" role="status" aria-live="polite"></div>
 
     <!-- ===== 设置面板 ===== -->
     <div id="settingsPanel" class="settings-panel is-hidden" role="dialog" aria-labelledby="settingsTitle" aria-modal="true">
@@ -330,6 +341,6 @@
         </div>
     </div>
 
-    <script src="main.js?v=2.2.1" defer></script>
+    <script src="main.js?v=2.2.2" defer></script>
 </body>
 </html>

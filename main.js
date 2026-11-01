@@ -7,7 +7,7 @@
 const $ = id => document.getElementById(id);
 
 // ===== 版本标识（用于确认浏览器实际加载的是哪一版，排查旧缓存）=====
-const APP_VERSION = '2.2.1';
+const APP_VERSION = '2.2.2';
 const IMAGE_SEARCH_MODE = 'sandbox-bridge';
 console.log(
     '%c[Navigator] v' + APP_VERSION + ' · 识图=' + IMAGE_SEARCH_MODE,
@@ -15,24 +15,89 @@ console.log(
 );
 
 // ===== Toast 通知系统 (替代 alert) =====
+// 显示在底部居中：顶部右上角是操作按钮、右下角是回到顶部按钮，
+// 只有底部中间不会压住任何控件。
 const ToastManager = {
     container: null,
+    maxVisible: 3,
+    _timers: new WeakMap(),
+
     init() {
         this.container = $('toastContainer');
     },
+
     show(message, type = 'info', duration = 3000) {
         if (!this.container) return;
         const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
+
+        // 超过上限先挤掉最早的一条，避免刷屏把页面堆满
+        while (this.container.querySelectorAll('.toast:not([data-leaving])').length >= this.maxVisible) {
+            const oldest = this.container.querySelector('.toast:not([data-leaving])');
+            if (!oldest) break;
+            this.dismiss(oldest);
+        }
+
         const toast = document.createElement('div');
         toast.className = `toast toast--${type}`;
-        toast.innerHTML = `<span class="toast__icon">${icons[type] || icons.info}</span><span>${message}</span>`;
-        this.container.appendChild(toast);
+        toast.innerHTML =
+            `<span class="toast__icon">${icons[type] || icons.info}</span>` +
+            `<span class="toast__text">${message}</span>` +
+            `<span class="toast__bar" style="animation-duration:${duration}ms"></span>`;
 
-        setTimeout(() => {
-            toast.classList.add('toast-out');
-            setTimeout(() => toast.remove(), 250);
-        }, duration);
+        // 鼠标悬停时暂停倒计时，方便读完长提示；点一下立即关闭
+        toast.addEventListener('mouseenter', () => this.pause(toast));
+        toast.addEventListener('mouseleave', () => this.resume(toast));
+        toast.addEventListener('click', () => this.dismiss(toast));
+
+        this.container.appendChild(toast);
+        this.syncActive();
+        this.schedule(toast, duration);
     },
+
+    schedule(toast, duration) {
+        this._timers.set(toast, {
+            remaining: duration,
+            startedAt: performance.now(),
+            id: setTimeout(() => this.dismiss(toast), duration)
+        });
+    },
+
+    pause(toast) {
+        const t = this._timers.get(toast);
+        if (!t) return;
+        clearTimeout(t.id);
+        t.remaining -= performance.now() - t.startedAt;
+        t.id = null;
+        toast.classList.add('is-paused');
+    },
+
+    resume(toast) {
+        const t = this._timers.get(toast);
+        if (!t || toast.dataset.leaving === '1') return;
+        if (t.remaining <= 0) { this.dismiss(toast); return; }
+        t.startedAt = performance.now();
+        t.id = setTimeout(() => this.dismiss(toast), t.remaining);
+        toast.classList.remove('is-paused');
+    },
+
+    dismiss(toast) {
+        if (!toast || toast.dataset.leaving === '1') return;
+        toast.dataset.leaving = '1';
+        const t = this._timers.get(toast);
+        if (t) { clearTimeout(t.id); this._timers.delete(toast); }
+        toast.classList.add('toast-out');
+        setTimeout(() => {
+            toast.remove();
+            this.syncActive();
+        }, 220);
+    },
+
+    // 手机端有通知时把「回到顶部」按钮顶上去，两者不重叠
+    syncActive() {
+        if (!this.container) return;
+        document.body.classList.toggle('toast-active', this.container.children.length > 0);
+    },
+
     success(msg, d) { this.show(msg, 'success', d); },
     error(msg, d) { this.show(msg, 'error', d); },
     warning(msg, d) { this.show(msg, 'warning', d); },
@@ -91,23 +156,38 @@ const ConfirmManager = {
 const ThemeManager = {
     init() {
         this.btn = $('themeToggleBtn');
-        this.theme = localStorage.getItem('nav_theme') || 'light';
-        this.applyTheme(this.theme);
+        let saved = 'light';
+        try { saved = localStorage.getItem('nav_theme') || 'light'; } catch (e) { /* 忽略 */ }
+        this.theme = saved;
+        this.applyTheme(this.theme, false);
         this.btn?.addEventListener('click', () => this.toggleTheme());
     },
     toggleTheme() {
         this.theme = this.theme === 'light' ? 'dark' : 'light';
-        localStorage.setItem('nav_theme', this.theme);
-        this.applyTheme(this.theme);
+        try { localStorage.setItem('nav_theme', this.theme); } catch (e) { /* 忽略 */ }
+        this.applyTheme(this.theme, true);
     },
-    applyTheme(theme) {
+    applyTheme(theme, animate = false) {
+        const root = document.documentElement;
+
+        // 只在实际切换时开启 0.3s 的颜色过渡，首屏加载不会拖慢绘制
+        if (animate) {
+            root.classList.add('theme-transitioning');
+            clearTimeout(this._transitionTimer);
+            this._transitionTimer = setTimeout(() => root.classList.remove('theme-transitioning'), 340);
+        }
+
         if (theme === 'dark') {
-            document.documentElement.setAttribute('data-theme', 'dark');
+            root.setAttribute('data-theme', 'dark');
             if (this.btn) this.btn.textContent = '☀️';
         } else {
-            document.documentElement.removeAttribute('data-theme');
+            root.removeAttribute('data-theme');
             if (this.btn) this.btn.textContent = '🌙';
         }
+
+        // 移动端浏览器地址栏跟着换色
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', theme === 'dark' ? '#0b0e14' : '#3b82f6');
     }
 };
 
@@ -538,7 +618,10 @@ const AccessibilityManager = {
         if (!modal) return;
         this.lastFocusedElement = document.activeElement;
         modal.classList.remove('is-hidden');
+        // 锁滚动前把滚动条宽度补成 padding，页面不会左右跳一下
+        const gap = window.innerWidth - document.documentElement.clientWidth;
         document.body.style.overflow = 'hidden';
+        document.body.style.paddingRight = gap > 0 ? gap + 'px' : '';
     },
     closeModal(modalId) {
         const modal = $(modalId);
@@ -548,6 +631,7 @@ const AccessibilityManager = {
             setTimeout(() => this.lastFocusedElement.focus(), 100);
         }
         document.body.style.overflow = '';
+        document.body.style.paddingRight = '';
     }
 };
 
@@ -1801,6 +1885,15 @@ function bindEvents() {
         if (el) el.addEventListener(event, handler);
     });
 
+    // 顶栏按钮是 div，补上键盘可达（Tab 聚焦 + 回车 / 空格触发）
+    document.querySelector('.nav-header__actions')?.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const btn = e.target.closest('.nav-header__btn');
+        if (!btn) return;
+        e.preventDefault();
+        btn.click();
+    });
+
     // 新分类输入框回车
     $('newCategoryNameInput')?.addEventListener('keypress', e => {
         if (e.key === 'Enter') addNewCategory();
@@ -1910,11 +2003,15 @@ function bindEvents() {
         }));
     });
 
-    // 回到顶部按钮 + 滚动时收起右键菜单
+    // 回到顶部按钮 + 顶栏滚动态 + 滚动时收起右键菜单
+    const navHeader = document.querySelector('.nav-header');
     window.addEventListener('scroll', () => {
         const btn = $('backToTop');
         if (btn) {
             btn.classList.toggle('is-visible', window.scrollY > 300);
+        }
+        if (navHeader) {
+            navHeader.classList.toggle('is-scrolled', window.scrollY > 8);
         }
         hideContextMenu();
     }, { passive: true });

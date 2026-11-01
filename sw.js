@@ -5,7 +5,7 @@
  *     跨域请求（含识图上传）一律不拦截，避免影响 Google Lens 提交。
  */
 
-const CACHE_NAME = 'nav-cache-v7';
+const CACHE_NAME = 'nav-cache-v8';
 
 // 需要预缓存的静态资源（相对路径，兼容子目录部署）
 const STATIC_ASSETS = [
