@@ -7,7 +7,7 @@
 const $ = id => document.getElementById(id);
 
 // ===== 版本标识（用于确认浏览器实际加载的是哪一版，排查旧缓存）=====
-const APP_VERSION = '2.2.2';
+const APP_VERSION = '2.3.0';
 const IMAGE_SEARCH_MODE = 'sandbox-bridge';
 console.log(
     '%c[Navigator] v' + APP_VERSION + ' · 识图=' + IMAGE_SEARCH_MODE,
@@ -586,6 +586,37 @@ const AccessibilityManager = {
         document.addEventListener('keydown', (e) => this.handleKeyDown(e));
     },
     handleKeyDown(e) {
+        const target = e.target || {};
+        const tag = (target.tagName || '').toLowerCase();
+        const inField = tag === 'input' || tag === 'textarea' || target.isContentEditable;
+        const filterInput = $('linkFilterInput');
+        const inFilter = filterInput && target === filterInput;
+        const modalOpen = ['settingsPanel', 'addLinkModal', 'editLinkModal', 'categoryManageModal', 'confirmModal']
+            .some(id => $(id) && !$(id).classList.contains('is-hidden'));
+
+        // 「/」聚焦过滤框（和 GitHub、语雀一个习惯）
+        if (e.key === '/' && !inField && !modalOpen) {
+            e.preventDefault();
+            filterInput?.focus();
+            return;
+        }
+
+        // ↑↓ 在卡片间移动；在过滤框里也生效，选完回车直接打开
+        if (!modalOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && (!inField || inFilter)) {
+            e.preventDefault();
+            KeyboardNav.move(e.key === 'ArrowDown' ? 1 : -1);
+            return;
+        }
+
+        // 回车打开选中的链接（没选中就打开第一条匹配）
+        if (!modalOpen && e.key === 'Enter' && (!inField || inFilter)) {
+            if (KeyboardNav.index >= 0 || (inFilter && LinkFilter.keyword)) {
+                e.preventDefault();
+                KeyboardNav.open();
+                return;
+            }
+        }
+
         if (e.key === 'Escape') {
             // 优先关闭确认弹窗
             if (!$('confirmModal').classList.contains('is-hidden')) {
@@ -606,6 +637,13 @@ const AccessibilityManager = {
                     closeFns[id]?.();
                     return;
                 }
+            }
+            // 有过滤词：先清空过滤
+            if (filterInput && filterInput.value) {
+                filterInput.value = '';
+                LinkFilter.keyword = '';
+                LinkFilter.apply();
+                return;
             }
             // 隐藏右键菜单和搜索引擎下拉
             hideContextMenu();
@@ -733,12 +771,19 @@ const LinkFilter = {
         const kw = this.keyword;
         let matched = 0;
 
+        // 输入拉丁字母时按需加载拼音表，加载完再过滤一次（首屏不背这 20KB）
+        if (kw && !PinyinSearch.table && /^[a-z0-9]+$/.test(kw)) {
+            PinyinSearch.load().then(table => {
+                if (table && this.keyword === kw) this.apply();
+            });
+        }
+
         document.querySelectorAll('.category-module').forEach(mod => {
             let visibleInModule = 0;
 
             mod.querySelectorAll('.category-module__link').forEach(card => {
                 const text = (card.querySelector('.link-text')?.textContent || '').toLowerCase();
-                const hit = !kw || text.includes(kw);
+                const hit = !kw || text.includes(kw) || (kw && PinyinSearch.initials(text).includes(kw));
                 card.style.display = hit ? '' : 'none';
                 if (hit) visibleInModule++;
             });
@@ -755,6 +800,9 @@ const LinkFilter = {
             }
         });
 
+        // 过滤结果变了，键盘选中项失效
+        KeyboardNav.clear();
+
         const clearBtn = $('linkFilterClear');
         const countEl = $('linkFilterCount');
         if (clearBtn) clearBtn.hidden = !kw;
@@ -769,6 +817,100 @@ const LinkFilter = {
         }
     }
 };
+
+// ===== 拼音首字母（懒加载：只有输入拉丁字母时才拉 pinyin.js）=====
+const PinyinSearch = {
+    table: null,
+    loading: null,
+
+    load() {
+        if (this.table) return Promise.resolve(this.table);
+        if (this.loading) return this.loading;
+
+        this.loading = new Promise(resolve => {
+            const script = document.createElement('script');
+            script.src = 'pinyin.js?v=' + APP_VERSION;
+            script.async = true;
+            script.onload = () => {
+                this.table = window.PINYIN_TABLE || '';
+                resolve(this.table);
+            };
+            // 加载失败就静默降级成「只能按文字匹配」，不影响主流程
+            script.onerror = () => {
+                this.loading = null;
+                resolve('');
+            };
+            document.head.appendChild(script);
+        });
+        return this.loading;
+    },
+
+    // "哔哩哔哩" -> "blbl"；英文/数字原样保留；标点、空格丢弃
+    initials(text) {
+        if (!this.table || !text) return '';
+        let out = '';
+        for (const ch of text.toLowerCase()) {
+            const code = ch.codePointAt(0);
+            if (code >= 0x4e00 && code <= 0x9fa5) {
+                const letter = this.table[code - 0x4e00];
+                if (letter && letter !== '#') out += letter;
+            } else if (ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9') {
+                out += ch;
+            }
+        }
+        return out;
+    }
+};
+
+// ===== 键盘操作：/ 聚焦过滤框、↑↓ 选择、Enter 打开、Esc 清空 =====
+const KeyboardNav = {
+    index: -1,
+
+    // 只算「当前真的看得见」的卡片：没被过滤掉、所在分类没折叠
+    visibleCards() {
+        return Array.from(document.querySelectorAll('.category-module__link')).filter(card => {
+            if (card.style.display === 'none') return false;
+            const mod = card.closest('.category-module');
+            if (mod && (mod.style.display === 'none' || mod.classList.contains('is-collapsed'))) return false;
+            return true;
+        });
+    },
+
+    move(delta) {
+        const cards = this.visibleCards();
+        if (!cards.length) return;
+        let next;
+        if (this.index < 0) {
+            next = delta > 0 ? 0 : cards.length - 1;
+        } else {
+            next = Math.max(0, Math.min(cards.length - 1, this.index + delta));
+        }
+        this.select(cards, next);
+    },
+
+    select(cards, next) {
+        this.clear();
+        const card = cards[next];
+        if (!card) return;
+        this.index = next;
+        card.classList.add('is-selected');
+        card.scrollIntoView({ block: 'nearest' });
+    },
+
+    clear() {
+        document.querySelectorAll('.category-module__link.is-selected')
+            .forEach(el => el.classList.remove('is-selected'));
+        this.index = -1;
+    },
+
+    open() {
+        const card = document.querySelector('.category-module__link.is-selected')
+            || this.visibleCards()[0];
+        const a = card?.querySelector('a');
+        if (a) window.open(a.href, '_blank', 'noopener');
+    }
+};
+
 
 // ===== 弹窗拖拽功能 =====
 function makeDraggable(modalId, headerId) {
@@ -1409,6 +1551,56 @@ function saveLink() {
     ToastManager.success('链接已添加');
 }
 
+// ===== 站点图标：优先自己的 Worker 代理，其次公共源，全挂就退回首字母色块 =====
+function faviconSources(hostname) {
+    const host = encodeURIComponent(hostname);
+    const sources = [];
+    // Worker 的 /icon 走 CF 边缘抓取 + KV 缓存，国内网络也能出图
+    if (CloudflareSync.workerUrl) {
+        sources.push(`${CloudflareSync.workerUrl.replace(/\/$/, '')}/icon?u=${host}`);
+    }
+    sources.push(`https://icons.duckduckgo.com/ip3/${host}.ico`);
+    sources.push(`https://www.google.com/s2/favicons?domain=${host}&sz=64`);
+    return sources;
+}
+
+// 首字母色块：图标全失败时的兜底，比空白好看，也还能认
+function letterAvatar(name) {
+    const span = document.createElement('span');
+    span.className = 'link-icon link-icon--fallback';
+    const text = (name || '?').trim();
+    span.textContent = Array.from(text)[0] ? Array.from(text)[0].toUpperCase() : '?';
+    // 用名字算一个稳定的色相，同一个站点颜色不会每次刷新都变
+    let hue = 0;
+    for (const ch of text) hue = (hue * 31 + ch.codePointAt(0)) % 360;
+    span.style.setProperty('--avatar-hue', hue);
+    return span;
+}
+
+function makeIcon(name, url) {
+    const img = document.createElement('img');
+    img.className = 'link-icon';
+    img.draggable = false;
+    img.alt = '';
+    img.loading = 'lazy';
+
+    let hostname = 'example.com';
+    try { hostname = new URL(url).hostname; } catch (e) { /* URL 不合法就用占位域 */ }
+
+    const sources = faviconSources(hostname);
+    let i = 0;
+    img.src = sources[i];
+    img.onerror = function () {
+        i += 1;
+        if (i < sources.length) {
+            img.src = sources[i];
+            return;
+        }
+        img.replaceWith(letterAvatar(name));
+    };
+    return img;
+}
+
 // ===== 创建链接卡片 (公共方法，消除重复代码) =====
 function createLinkCard(link) {
     const linkDiv = document.createElement('div');
@@ -1422,24 +1614,11 @@ function createLinkCard(link) {
     linkA.rel = 'noopener noreferrer';
     linkA.draggable = false;
 
-    const iconImg = document.createElement('img');
-    iconImg.className = 'link-icon';
-    iconImg.draggable = false;
-    iconImg.alt = '';
-    iconImg.loading = 'lazy';
-    try {
-        const urlObj = new URL(link.url);
-        iconImg.src = `https://www.google.com/s2/favicons?domain=${urlObj.hostname}&sz=64`;
-    } catch(e) {
-        iconImg.src = 'https://www.google.com/s2/favicons?domain=example.com&sz=64';
-    }
-    iconImg.onerror = function() { this.style.visibility = 'hidden'; };
-
     const textSpan = document.createElement('span');
     textSpan.className = 'link-text';
     textSpan.textContent = link.name;
 
-    linkA.appendChild(iconImg);
+    linkA.appendChild(makeIcon(link.name, link.url));
     linkA.appendChild(textSpan);
 
     linkDiv.addEventListener('contextmenu', function(e) { showContextMenu(e, link.id); });

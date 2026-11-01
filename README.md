@@ -58,21 +58,34 @@
 - **以图搜图（Google Lens）**：点搜索框右侧相机图标选图，自动跳转 Google Lens 识图结果。
 - **三种投喂方式**：点相机按钮选文件 · `Ctrl+V` 粘贴剪贴板图片 · 把图片直接拖到搜索框上。
 - **链接快速过滤**：搜索框下方输入关键词，实时筛选已保存的链接；命中的分类自动展开，并显示匹配数量与一键清空按钮。
+- **拼音首字母**：输入 `blbl` 就能找到「哔哩哔哩」，`mfym` 找到「免费域名」。拼音表按需加载，不用拼音的用户一个字节都不用付。
+
+### ⌨️ 键盘操作
+
+| 按键 | 效果 |
+| --- | --- |
+| `/` | 聚焦链接过滤框 |
+| `↑` / `↓` | 在卡片间上下移动（选中的卡片会抬起并描边） |
+| `Enter` | 打开选中的链接（没选中则打开第一条匹配） |
+| `Esc` | 清空过滤词 → 关闭弹窗 → 收起右键菜单（按此顺序） |
+| `Tab` | 顶栏按钮现在可聚焦，`Enter` / `空格` 触发 |
 
 ### 🗂️ 浏览体验
 
-- **深浅色模式**：一键切换，偏好自动记忆。
+- **深浅色模式**：一键切换，偏好自动记忆（首屏就应用，不会白闪）。
 - **顶栏时钟**：显示日期、星期与时间。
-- **自定义反馈**：用 Toast 通知替代 `alert`，用自定义确认弹窗替代 `confirm`，不再打断浏览。
+- **自定义反馈**：用 Toast 通知替代 `alert`（底部居中，不挡按钮；悬停暂停、点击关闭），用自定义确认弹窗替代 `confirm`，不再打断浏览。
 - **弹窗可拖拽**：所有面板都能拖动位置。
 - **回到顶部**：右下角悬浮按钮。
-- **键盘友好**：`Esc` 关闭当前弹窗 / 收起下拉菜单。
+- **图标兜底**：站点图标取不到时显示首字母色块，不会留一片空白。
 
 ### ☁️ 数据与同步
 
 - **本地优先**：默认完全离线可用，数据存在浏览器本地。
 - **导入 / 导出**：一键导出 JSON 备份，或从 JSON 文件恢复。
 - **云端同步（可选）**：填入 Cloudflare Worker 地址后即可上传 / 下载数据；数据变更后自动同步（带防抖）。
+- **Token 鉴权**：Worker 支持 `NAV_TOKEN` secret，URL 泄露也不等于数据泄露。
+- **多份数据**：不同 Token 对应不同数据分区，互不干扰。
 - **一键重置**：清理本地数据，恢复到初始状态。
 
 ### 📱 PWA 与移动端
@@ -113,9 +126,14 @@ npx serve .
 simple-2000s-navigator/
 ├── index.html          # 页面骨架（含 SW 注册、弹窗结构）
 ├── style.css           # 全部样式：主题变量、布局、响应式、动效
-├── main.js             # 界面逻辑：折叠、过滤、识图、拖拽、弹窗、诊断
+├── main.js             # 界面逻辑：折叠、过滤、拼音、键盘、识图、拖拽、弹窗
 ├── app.js              # 数据层：DataManager（localStorage）+ CloudflareSync
-├── sw.js               # Service Worker：网络优先缓存策略
+├── pinyin.js           # 拼音首字母表（生成文件，按需加载，约 22KB）
+├── sw.js               # Service Worker：HTML 网络优先 / 静态资源 stale-while-revalidate
+├── _headers            # 静态资源缓存与安全响应头
+├── worker/
+│   ├── nav-api.js      # 同步接口 Worker（Token 鉴权 + 数据分区 + 图标代理）
+│   └── wrangler.example.toml
 ├── manifest.json       # PWA 清单（内联 SVG 图标，无额外图片依赖）
 ├── start-server.bat    # Windows 一键本地预览脚本
 ├── LICENSE             # MIT 许可证
@@ -140,65 +158,44 @@ simple-2000s-navigator/
 2. 在 **Settings → Variables → KV Namespace Bindings** 添加绑定：
    - Variable name：`NAV_DATA`
    - KV namespace：选择刚创建的命名空间
-3. 粘贴以下代码并部署：
+3. 把本仓库的 [`worker/nav-api.js`](worker/nav-api.js) 整份粘贴进去并部署
+   （或用 wrangler：`cp worker/wrangler.example.toml worker/wrangler.toml`，填好 KV id 后 `npx wrangler deploy`）
+4. **设置 Token（强烈建议）**：Settings → Variables and Secrets → 添加 **Secret** `NAV_TOKEN`，值自己定
+   （wrangler 用户执行 `npx wrangler secret put NAV_TOKEN`）
 
-```javascript
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
+Worker 提供的接口：
 
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    };
+| 路由 | 说明 |
+| --- | --- |
+| `GET /api/data` | 读取整份数据，需要 `Authorization: Bearer <NAV_TOKEN>` |
+| `POST /api/data` | 写入整份数据，同上 |
+| `GET /icon?u=example.com` | 站点图标代理，KV 缓存 30 天，免鉴权 |
+| `GET /api/health` | 健康检查，返回 `{ ok, auth, kv }` |
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders });
-    }
+> **没设 `NAV_TOKEN` 会怎样**：Worker 会退回旧的「谁都能读写」模式，方便你平滑升级；
+> 设了之后就必须带 Token，否则 401。
+>
+> **数据存哪**：键名是 `data:<token 的 sha256 前 8 字节>`，所以不同 Token 各存各的，
+> 同一个 Token 的多台设备共用一份。升级前存在 `data` 上的老数据会自动回退读取，
+> 第一次上传后完成迁移。
 
-    if (url.pathname === '/api/data') {
-      if (request.method === 'GET') {
-        const data = await env.NAV_DATA.get('data');
-        return new Response(
-          data || JSON.stringify({
-            categories: [{ id: 1, name: '常用网站', icon: '', order: 1 }],
-            links: [],
-            meta: { version: 1, lastUpdate: new Date().toISOString() },
-          }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
+### 3. 部署静态站点
 
-      if (request.method === 'POST') {
-        const data = await request.text();
-        await env.NAV_DATA.put('data', data);
-        return new Response('OK', { headers: corsHeaders });
-      }
-    }
+两种都行，仓库里已经放好 [`_headers`](_headers)（缓存 + 安全响应头），部署时会自动生效：
 
-    return new Response('Not Found', { status: 404 });
-  },
-};
-```
-
-### 3. 部署静态站点到 Pages
-
-1. 进入 **Workers & Pages → Pages → Connect to git**，选择本仓库
-2. 构建设置：
-   - **Build command**：留空
-   - **Build output directory**：`/`
-   - **Root directory**：`/`
-3. 部署完成后会得到一个 `https://<项目名>.pages.dev` 地址
+- **Workers 静态资源**（当前线上用的就是这个）：`npx wrangler deploy`，`assets.directory` 指向仓库根目录
+- **Pages**：进入 **Workers & Pages → Pages → Connect to git**，选本仓库，
+  Build command 留空、Build output directory 填 `/`
 
 ### 4. 在页面里启用同步
 
-1. 打开 Pages 地址，点右上角 **设置**
+1. 打开站点，点右上角 **设置**
 2. 填入 Worker 地址（`https://<worker名>.<账户>.workers.dev`）
-3. **API Token** 留空即可（当前 Worker 示例未做鉴权）
+3. **API Token** 填刚才设置的 `NAV_TOKEN`（没设 secret 就随便填一个非空值）
 4. 点 **登录**，验证通过后即可使用「上传到云端 / 下载云端数据」
 
-> ⚠️ 示例 Worker 未做任何鉴权，**任何知道地址的人都能读写你的数据**。若要公开部署，请自行加 Token 校验或换用私有方案。
+> 配好之后，卡片图标会优先走 `Worker/icon` 代理（CF 边缘抓取 + KV 缓存），
+> 国内网络下也不会出现「一排空白图标」；代理不可用时会自动回退到公共图标源，再不行显示首字母色块。
 
 ---
 
@@ -225,7 +222,10 @@ export default {
 
 | 操作 | 效果 |
 | --- | --- |
-| `Esc` | 关闭当前弹窗 / 收起搜索引擎下拉 |
+| `/` | 聚焦链接过滤框 |
+| `↑` / `↓` | 在卡片间移动选择 |
+| `Enter` | 打开选中的链接 |
+| `Esc` | 清空过滤词 / 关闭当前弹窗 / 收起搜索引擎下拉 |
 | `Enter` / `Space` | 在搜索引擎选择器上展开下拉 |
 | `Ctrl+V` | 粘贴图片直接识图 |
 | 拖拽图片到搜索框 | 同上 |
@@ -279,9 +279,22 @@ export default {
 ### 缓存策略
 
 - 静态资源统一带 `?v=` 版本号
-- `sw.js` 对同源请求使用 `fetch(req, { cache: 'no-cache' })`，绕过浏览器 HTTP 缓存
+- `sw.js` 分流：**HTML 走 Network First**（部署后立刻换新），**带 `?v=` 的资源走 Stale While Revalidate**（秒开，后台更新）
+- `_headers` 给带版本号的资源加长缓存（7 天 + `stale-while-revalidate`），HTML 保持每次校验
 - 跨域请求（含识图上传）一律不拦截，避免干扰 Google Lens 提交
 - 设置面板提供 **「强制刷新」**：注销 SW + 清空 Cache Storage + 带时间戳重载
+
+### 拼音首字母表是怎么来的
+
+`pinyin.js` 是**生成文件**（`window.PINYIN_TABLE`，覆盖 U+4E00–U+9FA5，索引 = 码点 - 0x4E00），
+用 [pinyin-pro](https://github.com/zh-lx/pinyin-pro) 在构建期跑一遍生成，运行时不再依赖它：
+
+```bash
+npm i pinyin-pro          # 仅生成时需要
+node -e "…"               # 逐字取首字母，拼成 20902 字符的字符串
+```
+
+运行时只在「过滤框里出现拉丁字母」时才 `import()` 这个文件，用不到的人不会下载它。
 
 ---
 
@@ -348,12 +361,27 @@ v2.2.1 已修复：旧版兜底逻辑会额外 `window.open` 或把弹窗跳转�
 
 1. **改完静态资源记得升版本号**：同步修改 `index.html` 里的 `?v=x.y.z`、`main.js` 的 `APP_VERSION`、`sw.js` 的 `CACHE_NAME`，三者保持一致，否则用户会看到旧版。
 2. **保持数据结构向后兼容**：`nav_data` 只增字段，不改名、不删字段。
-3. **不引入构建工具**：保持「克隆即运行」，不要新增需要编译的依赖。
+3. **不引入构建工具**：保持「克隆即运行」，不要新增需要编译的依赖。`pinyin.js` 是唯一的数据生成文件，生成脚本见上文，产物直接提交。
 4. **注释写清「为什么」**：尤其是识图、缓存这类反直觉的逻辑。
+5. **新增外部资源先想「国内能不能通」**：图标、字体、CDN 都按这个标准挑，取不到要有兜底。
 
 ---
 
 ## 更新日志
+
+### v2.3.0
+
+- **拼音首字母搜索**：过滤框输入 `blbl` 找到「哔哩哔哩」、`mfym` 找到「免费域名」。
+  拼音表（`pinyin.js`，20902 字）**按需加载**，只在输入拉丁字母时才拉，不用的人零成本
+- **键盘操作**：`/` 聚焦过滤框、`↑↓` 在卡片间移动（抬起 + 描边）、`Enter` 打开、`Esc` 清空；
+  顶栏按钮支持 `Tab` + `Enter`
+- **图标兜底**：取不到图标时显示首字母色块（色相按名字算，稳定不闪），不再是一片空白；
+  图标源改为「Worker 代理 → DuckDuckGo → Google」三级降级
+- **Worker 升级（`worker/nav-api.js`）**：`NAV_TOKEN` 鉴权、Token 派生数据分区（多份数据互不干扰）、
+  `/icon` 图标代理（KV 缓存 30 天）、`/api/health`；没设 Token 时自动退回旧行为，升级不中断
+- **性能**：`app.js` 加 `defer`（不再阻塞首屏）；SW 分流为「HTML 网络优先 + 版本化资源 stale-while-revalidate」；
+  新增 `_headers` 给版本化资源加长缓存并补 `nosniff` / `Referrer-Policy`
+- **安全**：图标代理只向固定公共源取图、拒绝 IP / localhost，避免被当 SSRF 跳板；数据接口限制 2MB 与 JSON 校验
 
 ### v2.2.2
 

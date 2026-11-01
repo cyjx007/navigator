@@ -1,0 +1,18 @@
+# 同步接口 Worker 的 wrangler 配置示例
+# 用法：把本文件复制成 worker/wrangler.toml，填上 KV id，然后
+#   cd worker && npx wrangler deploy
+# 再设置 Token（只做一次，值不要提交到仓库）：
+#   npx wrangler secret put NAV_TOKEN
+
+name = "nav-api"
+main = "nav-api.js"
+compatibility_date = "2026-01-01"
+
+# KV：存导航数据 + 图标缓存
+[[kv_namespaces]]
+binding = "NAV_DATA"
+id = "<在 Cloudflare Dashboard → Workers & Pages → KV 里创建后拿到的 id>"
+
+# 可选：把 CORS 锁到你的站点域名（不填则放开为 *，有 Token 兜底）
+# [vars]
+# ALLOWED_ORIGIN = "https://navigator.9034999.workers.dev"

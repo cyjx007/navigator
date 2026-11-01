@@ -24,10 +24,12 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/%3E%3C/svg%3E" type="image/svg+xml">
 
     <!-- 资源统一带版本号，避免旧缓存导致改动不生效 -->
-    <link href="style.css?v=2.2.2" rel="stylesheet" type="text/css">
+    <link href="style.css?v=2.3.0" rel="stylesheet" type="text/css">
     <link rel="manifest" href="manifest.json">
+    <!-- 拼音首字母表：空闲时预取，真正输入时已经在缓存里；加载失败不影响使用 -->
+    <link rel="prefetch" href="pinyin.js?v=2.3.0">
 
-    <script src="app.js?v=2.2.2"></script>
+    <script src="app.js?v=2.3.0" defer></script>
     <script>
         // 注册 Service Worker（相对路径，兼容子目录部署）
         if ('serviceWorker' in navigator) {
@@ -104,7 +106,7 @@
                 </div>
                 <div class="settings-item">
                     <label>API Token</label>
-                    <input type="password" id="apiToken" class="input-api-token" placeholder="输入API Token">
+                    <input type="password" id="apiToken" class="input-api-token" placeholder="Worker 的 NAV_TOKEN（没设 secret 时随便填）" autocomplete="off">
                 </div>
                 <div class="settings-item">
                     <div style="display: flex; gap: 10px; margin-bottom: 10px;">
@@ -305,7 +307,7 @@
             <!-- 链接快速过滤 -->
             <div class="link-filter-wrapper">
                 <svg class="link-filter-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 11a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9zm0-1.6a2.9 2.9 0 1 0 0-5.8 2.9 2.9 0 0 0 0 5.8z"/><path d="M10 10l4 4-1.1 1.1-4-4z"/></svg>
-                <input type="text" class="link-filter-input" id="linkFilterInput" placeholder="快速过滤已保存的链接…" autocomplete="off">
+                <input type="text" class="link-filter-input" id="linkFilterInput" placeholder="快速过滤已保存的链接…（支持拼音首字母，按 / 聚焦）" title="支持拼音首字母：输入 blbl 可找到「哔哩哔哩」；↑↓ 选择，回车打开" autocomplete="off" spellcheck="false">
                 <span class="link-filter-count" id="linkFilterCount" hidden></span>
                 <button type="button" class="link-filter-clear" id="linkFilterClear" aria-label="清空过滤" hidden>&times;</button>
             </div>
@@ -341,6 +343,6 @@
         </div>
     </div>
 
-    <script src="main.js?v=2.2.2" defer></script>
+    <script src="main.js?v=2.3.0" defer></script>
 </body>
 </html>

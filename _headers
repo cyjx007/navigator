@@ -1,0 +1,28 @@
+# 静态资源的响应头（Workers 静态资源 / Pages 通用）
+# 注意：规则按顺序应用，越靠后越具体；这里先写兜底，再写特例。
+
+# 兜底：HTML 等每次回源校验，保证部署后立刻生效
+/*
+  Cache-Control: public, max-age=0, must-revalidate
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+# 带 ?v= 的资源：内容变了 URL 就变，可以放心长缓存（7 天 + 后台续期）
+/style.css
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+/main.js
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+/app.js
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+/pinyin.js
+  Cache-Control: public, max-age=604800, stale-while-revalidate=86400
+
+/manifest.json
+  Cache-Control: public, max-age=86400
+
+# Service Worker 必须永远拿最新，否则新版本推不下去
+/sw.js
+  Cache-Control: no-cache
