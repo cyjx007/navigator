@@ -108,8 +108,8 @@ Navigator 是一个不依赖任何框架、任何构建工具的个人导航页�
 ### 本地预览
 
 ```bash
-git clone https://github.com/cyjx007/simple-2000s-navigator.git
-cd simple-2000s-navigator
+git clone https://github.com/cyjx007/navigator.git
+cd navigator
 
 # 方式一：Python 自带静态服务器
 python -m http.server 8080
@@ -128,7 +128,7 @@ npx serve .
 ## 项目结构
 
 ```
-simple-2000s-navigator/
+navigator/
 ├── index.html          # 页面骨架（含 SW 注册、弹窗结构）
 ├── style.css           # 全部样式：主题变量、布局、响应式、动效
 ├── main.js             # 界面逻辑：折叠、过滤、拼音、键盘、识图、拖拽、弹窗
