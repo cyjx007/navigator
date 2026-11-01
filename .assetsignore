@@ -1,0 +1,12 @@
+# Workers 静态资源上传时排除这些文件（Pages 部署不受影响，会忽略本文件）
+# 目的：别把 Worker 源码、文档、许可证当成公开静态资源挂在站点根目录
+
+worker/
+README.md
+LICENSE
+.gitignore
+.assetsignore
+_headers
+_redirects
+wrangler.toml
+wrangler.jsonc
