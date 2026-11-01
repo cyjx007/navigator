@@ -7,7 +7,7 @@
 const $ = id => document.getElementById(id);
 
 // ===== 版本标识（用于确认浏览器实际加载的是哪一版，排查旧缓存）=====
-const APP_VERSION = '2.3.0';
+const APP_VERSION = '2.3.1';
 const IMAGE_SEARCH_MODE = 'sandbox-bridge';
 console.log(
     '%c[Navigator] v' + APP_VERSION + ' · 识图=' + IMAGE_SEARCH_MODE,
@@ -149,6 +149,40 @@ const ConfirmManager = {
 
             AccessibilityManager.openModal(this._modalId);
         });
+    }
+};
+
+// ===== 同步冲突弹窗（三选一，替代"静默覆盖"）=====
+const SyncConflict = {
+    _resolve: null,
+    _modalId: 'syncConflictModal',
+
+    init() {
+        $('syncMergeBtn')?.addEventListener('click', () => this._done('merge'));
+        $('syncOverwriteBtn')?.addEventListener('click', () => this._done('overwrite'));
+        $('syncCancelBtn')?.addEventListener('click', () => this._done('cancel'));
+        $('syncConflictClose')?.addEventListener('click', () => this._done('cancel'));
+    },
+
+    ask(info = {}) {
+        return new Promise(resolve => {
+            if (this._resolve) this._done('cancel');
+            this._resolve = resolve;
+
+            const text = $('syncConflictText');
+            if (text) {
+                const when = info.cloudUpdatedAt ? formatRelative(new Date(info.cloudUpdatedAt)) : '刚刚';
+                text.textContent = `云端在 ${when} 被另一台设备改过，和本地数据不一致（云端版本 ${info.cloudRev ?? '?'}）。要怎么处理？`;
+            }
+            AccessibilityManager.openModal(this._modalId);
+        });
+    },
+
+    _done(choice) {
+        AccessibilityManager.closeModal(this._modalId);
+        const fn = this._resolve;
+        this._resolve = null;
+        if (fn) fn(choice);
     }
 };
 
@@ -591,7 +625,7 @@ const AccessibilityManager = {
         const inField = tag === 'input' || tag === 'textarea' || target.isContentEditable;
         const filterInput = $('linkFilterInput');
         const inFilter = filterInput && target === filterInput;
-        const modalOpen = ['settingsPanel', 'addLinkModal', 'editLinkModal', 'categoryManageModal', 'confirmModal']
+        const modalOpen = ['settingsPanel', 'addLinkModal', 'editLinkModal', 'categoryManageModal', 'confirmModal', 'syncConflictModal']
             .some(id => $(id) && !$(id).classList.contains('is-hidden'));
 
         // 「/」聚焦过滤框（和 GitHub、语雀一个习惯）
@@ -621,6 +655,11 @@ const AccessibilityManager = {
             // 优先关闭确认弹窗
             if (!$('confirmModal').classList.contains('is-hidden')) {
                 ConfirmManager._resolveConfirm(false);
+                return;
+            }
+            // 同步冲突弹窗：Esc = 取消
+            if (!$('syncConflictModal').classList.contains('is-hidden')) {
+                SyncConflict._done('cancel');
                 return;
             }
             // 关闭其他弹窗
@@ -1022,6 +1061,7 @@ function openSettings() {
     $('apiToken').value = settings.apiToken || '';
     updateConfigStatus(settings);
     updateSyncButtonsVisibility();
+    renderBackupPanel();
     AccessibilityManager.openModal('settingsPanel');
 }
 
@@ -1116,7 +1156,134 @@ function exportData() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+    try { localStorage.setItem('nav_last_export', String(Date.now())); } catch (e) { /* 忽略 */ }
+    renderBackupPanel();
     ToastManager.success('数据已导出');
+}
+
+// ===== 备份与恢复：本地快照 + 云端上一版 =====
+function formatRelative(date) {
+    const diff = Math.max(0, Date.now() - date.getTime());
+    const min = Math.floor(diff / 60000);
+    if (min < 1) return '刚刚';
+    if (min < 60) return min + ' 分钟前';
+    const hour = Math.floor(min / 60);
+    if (hour < 24) return hour + ' 小时前';
+    return Math.floor(hour / 24) + ' 天前';
+}
+
+function formatDateTime(ts) {
+    const d = new Date(ts);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getMonth() + 1}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderBackupPanel() {
+    // 上次导出时间：超过 14 天标红提醒
+    const lastExportEl = $('lastExportText');
+    if (lastExportEl) {
+        const last = Number(localStorage.getItem('nav_last_export') || 0);
+        if (!last) {
+            lastExportEl.textContent = '从未导出';
+            lastExportEl.className = 'is-warn';
+        } else {
+            lastExportEl.textContent = formatRelative(new Date(last));
+            lastExportEl.className = (Date.now() - last > 14 * 86400000) ? 'is-warn' : '';
+        }
+    }
+
+    const box = $('snapshotList');
+    if (!box) return;
+
+    const list = DataManager.getSnapshots();
+    if (!list.length) {
+        box.innerHTML = '<div class="snapshot-empty">还没有历史版本（每次保存前会自动留一份）</div>';
+        return;
+    }
+
+    box.innerHTML = '';
+    list.forEach((item, index) => {
+        let count = '?';
+        try { count = (JSON.parse(item.raw).links || []).length; } catch (e) { /* 坏数据 */ }
+
+        const row = document.createElement('div');
+        row.className = 'snapshot-item';
+
+        const time = document.createElement('span');
+        time.className = 'snapshot-time';
+        time.textContent = formatDateTime(item.t);
+
+        const meta = document.createElement('span');
+        meta.className = 'snapshot-meta';
+        meta.textContent = count + ' 个链接';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'snapshot-restore';
+        btn.textContent = '恢复';
+        btn.addEventListener('click', () => restoreLocalSnapshot(index));
+
+        row.append(time, meta, btn);
+        box.appendChild(row);
+    });
+}
+
+async function restoreLocalSnapshot(index) {
+    const confirmed = await ConfirmManager.show(
+        '恢复历史版本',
+        '将用这份快照覆盖当前数据。当前状态也会存成一份快照，随时可以再退回来。继续？'
+    );
+    if (!confirmed) return;
+
+    const data = DataManager.restoreSnapshot(index);
+    if (!data) {
+        ToastManager.error('恢复失败：快照已损坏');
+        return;
+    }
+    renderCommonLinks();
+    renderCategoryLinks();
+    updateSyncInfo();
+    renderBackupPanel();
+    ToastManager.success('已恢复历史版本');
+    CloudflareSync.autoSync();
+}
+
+async function restoreCloudPrev() {
+    const btn = $('restoreCloudPrevBtn');
+    const settings = CloudflareSync.getSettings();
+    if (!settings.workerUrl || !settings.apiToken) {
+        ToastManager.warning('请先配置并登录云端同步');
+        return;
+    }
+
+    const confirmed = await ConfirmManager.show(
+        '恢复云端上一版',
+        '将拉取云端「上一次上传前」的自动备份并覆盖当前数据，然后上传成最新版本。继续？'
+    );
+    if (!confirmed) return;
+
+    if (btn) { btn.disabled = true; btn.textContent = '恢复中...'; }
+    LoadingManager.show('正在读取云端备份...');
+    try {
+        const result = await CloudflareSync.restoreCloudPrev();
+        if (!result.success) {
+            ToastManager.error(result.message || '恢复失败');
+            return;
+        }
+        renderCommonLinks();
+        renderCategoryLinks();
+        updateSyncInfo();
+        renderBackupPanel();
+        ToastManager.success('已恢复云端上一版');
+
+        const uploaded = await CloudflareSync.uploadData({ force: true });
+        if (!uploaded.success) {
+            ToastManager.warning('已恢复到本地，但上传失败：' + (uploaded.message || ''));
+        }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '恢复云端上一版'; }
+        LoadingManager.hide();
+    }
 }
 
 function importData() {
@@ -1296,7 +1463,38 @@ async function uploadToCloud() {
             }
         }
 
-        const uploadResult = await CloudflareSync.uploadData();
+        let uploadResult = await CloudflareSync.uploadData();
+
+        // 云端被别人先改过：不静默覆盖，交给用户决定
+        if (uploadResult.conflict) {
+            LoadingManager.hide();
+            syncStatus.textContent = '';
+            const choice = await SyncConflict.ask(uploadResult);
+
+            if (choice === 'cancel') {
+                syncStatus.textContent = '⚠ 已取消上传，云端数据保持原样';
+                syncStatus.style.color = 'var(--color-orange)';
+                return;
+            }
+
+            if (choice === 'merge') {
+                const remote = await CloudflareSync.fetchRemote();
+                if (!remote.ok || !remote.data) {
+                    syncStatus.textContent = '✗ 拉取云端数据失败: ' + (remote.message || '未知错误');
+                    syncStatus.style.color = 'var(--color-red)';
+                    return;
+                }
+                const merged = CloudflareSync.mergeData(DataManager.getData(), remote.data);
+                DataManager.saveData(merged);
+                renderCommonLinks();
+                renderCategoryLinks();
+                updateSyncInfo();
+                uploadResult = await CloudflareSync.uploadData({ force: true });
+            } else if (choice === 'overwrite') {
+                uploadResult = await CloudflareSync.uploadData({ force: true });
+            }
+        }
+
         if (uploadResult.success) {
             if (!settings.verified) {
                 CloudflareSync.saveSettings({ workerUrl, apiToken, verified: true });
@@ -1307,7 +1505,7 @@ async function uploadToCloud() {
             syncStatus.style.color = 'var(--color-green)';
             ToastManager.success('数据已上传到云端');
         } else {
-            syncStatus.textContent = '✗ ' + uploadResult.message;
+            syncStatus.textContent = '✗ ' + (uploadResult.message || '上传失败');
             syncStatus.style.color = 'var(--color-red)';
         }
     } catch (error) {
@@ -2056,7 +2254,8 @@ function bindEvents() {
         'editLinkBtn': ['click', () => openEditLinkModal(parseInt($('contextMenu').dataset.linkId))],
         'colorLinkBtn': ['click', () => showColorSubmenu(parseInt($('contextMenu').dataset.linkId))],
         'deleteLinkBtn': ['click', () => deleteLink(parseInt($('contextMenu').dataset.linkId))],
-        'backToTop': ['click', () => window.scrollTo({ top: 0, behavior: 'smooth' })]
+        'backToTop': ['click', () => window.scrollTo({ top: 0, behavior: 'smooth' })],
+        'restoreCloudPrevBtn': ['click', restoreCloudPrev]
     };
 
     Object.entries(events).forEach(([id, [event, handler]]) => {
@@ -2239,6 +2438,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 初始化各管理器
     ToastManager.init();
     ConfirmManager.init();
+    SyncConflict.init();
     LoadingManager.init();
     AccessibilityManager.init();
     CloudflareSync.init();

@@ -1,10 +1,10 @@
 /**
  * Service Worker - 导航页面缓存
- * v9: HTML 走 Network First（部署后立刻换新）；带 ?v= 的静态资源走 Stale While
+ * v10: HTML 走 Network First（部署后立刻换新）；带 ?v= 的静态资源走 Stale While
  *     Revalidate（秒开，后台更新）。跨域请求一律不拦截，避免影响识图上传。
  */
 
-const CACHE_NAME = 'nav-cache-v9';
+const CACHE_NAME = 'nav-cache-v10';
 
 // 需要预缓存的静态资源（相对路径，兼容子目录部署）
 const STATIC_ASSETS = [

@@ -46,6 +46,10 @@ export default {
       return handleData(request, env, cors);
     }
 
+    if (url.pathname === '/api/data/prev') {
+      return handlePrev(request, env, cors);
+    }
+
     if (url.pathname === '/icon') {
       return handleIcon(url, env, cors);
     }
@@ -55,6 +59,9 @@ export default {
 };
 
 // ===== 数据读写 =====
+// 并发控制：KV 里给数据键挂 metadata { rev, updatedAt }，每次写入 rev + 1。
+// 客户端上传时带 If-Match: <rev>，对不上就返回 409，前端弹窗让用户决定。
+// 写入前把旧值备份到 <key>:prev，误覆盖还能捞回来。
 async function handleData(request, env, cors) {
   if (!env.NAV_DATA) {
     return json({ error: 'KV 未绑定：请在 Worker 设置里添加 NAV_DATA' }, 500, cors);
@@ -69,12 +76,26 @@ async function handleData(request, env, cors) {
   const key = env.NAV_TOKEN ? `data:${await spaceId(token)}` : 'data';
 
   if (request.method === 'GET') {
-    let raw = await env.NAV_DATA.get(key);
-    if (raw === null && env.NAV_TOKEN) {
-      raw = await env.NAV_DATA.get('data'); // 兼容升级前的老键
+    let { value, metadata } = await env.NAV_DATA.getWithMetadata(key);
+
+    if (value === null && env.NAV_TOKEN) {
+      // 兼容升级前的老键
+      const legacy = await env.NAV_DATA.getWithMetadata('data');
+      value = legacy.value;
+      metadata = legacy.metadata;
     }
-    return new Response(raw === null ? DEFAULT_DATA : raw, {
-      headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+
+    const rev = String((metadata && metadata.rev) || 0);
+    const updatedAt = (metadata && metadata.updatedAt) || null;
+
+    return new Response(value === null ? DEFAULT_DATA : value, {
+      headers: {
+        ...cors,
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Data-Rev': rev,
+        'X-Data-Updated': updatedAt || '',
+      },
     });
   }
 
@@ -88,11 +109,88 @@ async function handleData(request, env, cors) {
     } catch (e) {
       return json({ error: 'Invalid JSON' }, 400, cors);
     }
-    await env.NAV_DATA.put(key, body);
-    return json({ ok: true, space: key.replace(/^data:/, ''), bytes: body.length }, 200, cors);
+
+    const current = await env.NAV_DATA.getWithMetadata(key);
+    const curRev = Number((current.metadata && current.metadata.rev) || 0);
+    const ifMatch = request.headers.get('If-Match');
+
+    // 带版本号且对不上 = 别人先改过，拒绝写入
+    if (ifMatch !== null && ifMatch !== '' && Number(ifMatch) !== curRev) {
+      return json({
+        error: 'conflict',
+        rev: curRev,
+        updatedAt: (current.metadata && current.metadata.updatedAt) || null,
+      }, 409, cors);
+    }
+
+    // 备份上一版（只在有内容时）
+    if (current.value !== null && current.value !== undefined) {
+      await env.NAV_DATA.put(`${key}:prev`, current.value, {
+        metadata: {
+          rev: curRev,
+          updatedAt: (current.metadata && current.metadata.updatedAt) || null,
+          savedAt: new Date().toISOString(),
+        },
+      });
+    }
+
+    const rev = curRev + 1;
+    const updatedAt = new Date().toISOString();
+    await env.NAV_DATA.put(key, body, { metadata: { rev, updatedAt } });
+
+    return new Response(JSON.stringify({
+      ok: true,
+      space: key.replace(/^data:/, ''),
+      bytes: body.length,
+      rev,
+      updatedAt,
+    }), {
+      headers: {
+        ...cors,
+        'Content-Type': 'application/json; charset=utf-8',
+        'X-Data-Rev': String(rev),
+        'X-Data-Updated': updatedAt,
+      },
+    });
   }
 
   return json({ error: 'Method Not Allowed' }, 405, cors);
+}
+
+// ===== 上一版数据（每次上传前的自动备份）=====
+async function handlePrev(request, env, cors) {
+  if (!env.NAV_DATA) {
+    return json({ error: 'KV 未绑定' }, 500, cors);
+  }
+  if (request.method !== 'GET') {
+    return json({ error: 'Method Not Allowed' }, 405, cors);
+  }
+
+  const token = getToken(request);
+  if (env.NAV_TOKEN && !timingSafeEqual(token, env.NAV_TOKEN)) {
+    return json({ error: 'Unauthorized' }, 401, cors);
+  }
+
+  const key = env.NAV_TOKEN ? `data:${await spaceId(token)}` : 'data';
+  const prev = await env.NAV_DATA.getWithMetadata(`${key}:prev`);
+
+  if (!prev.value) {
+    return json({ error: 'No previous version' }, 404, cors);
+  }
+
+  let data = null;
+  try {
+    data = JSON.parse(prev.value);
+  } catch (e) {
+    return json({ error: 'Previous version corrupted' }, 500, cors);
+  }
+
+  return json({
+    data,
+    savedAt: (prev.metadata && prev.metadata.savedAt) || null,
+    rev: (prev.metadata && prev.metadata.rev) || 0,
+    updatedAt: (prev.metadata && prev.metadata.updatedAt) || null,
+  }, 200, cors);
 }
 
 // ===== 图标代理 =====
@@ -187,7 +285,9 @@ function corsHeaders(env) {
   return {
     'Access-Control-Allow-Origin': allowed,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    // If-Match 用于乐观锁，属于非简单头，必须显式放行，否则预检不过
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, If-Match',
+    'Access-Control-Expose-Headers': 'X-Data-Rev, X-Data-Updated',
     'Access-Control-Max-Age': '86400',
     'X-Content-Type-Options': 'nosniff',
     Vary: 'Origin',

@@ -24,12 +24,12 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/%3E%3C/svg%3E" type="image/svg+xml">
 
     <!-- 资源统一带版本号，避免旧缓存导致改动不生效 -->
-    <link href="style.css?v=2.3.0" rel="stylesheet" type="text/css">
+    <link href="style.css?v=2.3.1" rel="stylesheet" type="text/css">
     <link rel="manifest" href="manifest.json">
     <!-- 拼音首字母表：空闲时预取，真正输入时已经在缓存里；加载失败不影响使用 -->
-    <link rel="prefetch" href="pinyin.js?v=2.3.0">
+    <link rel="prefetch" href="pinyin.js?v=2.3.1">
 
-    <script src="app.js?v=2.3.0" defer></script>
+    <script src="app.js?v=2.3.1" defer></script>
     <script>
         // 注册 Service Worker（相对路径，兼容子目录部署）
         if ('serviceWorker' in navigator) {
@@ -120,6 +120,18 @@
                 <div id="syncInfo" class="sync-info">
                     <div id="lastSyncTime"></div>
                     <div id="syncStatusInfo"></div>
+                </div>
+
+                <div class="settings-item">
+                    <label>备份与恢复</label>
+                    <div class="backup-row">上次导出：<b id="lastExportText">从未导出</b></div>
+                    <div class="snapshot-list" id="snapshotList"></div>
+                    <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+                        <button class="settings-btn settings-btn--secondary" id="restoreCloudPrevBtn" style="flex: 1;">恢复云端上一版</button>
+                    </div>
+                    <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">
+                        每次保存前会自动留一份本地快照（最多 5 份，只防误操作）；清空浏览器数据会连快照一起消失，重要数据请定期「导出数据」。
+                    </div>
                 </div>
 
                 <div class="settings-item">
@@ -257,6 +269,27 @@
         </div>
     </div>
 
+    <!-- ===== 同步冲突弹窗（云端被其他设备改过时）===== -->
+    <div id="syncConflictModal" class="settings-panel is-hidden" role="dialog" aria-modal="true" aria-labelledby="syncConflictTitle">
+        <div class="settings-panel__content" style="max-width: 420px;">
+            <div class="settings-panel__header" id="syncConflictHeader">
+                <h3 id="syncConflictTitle">云端有更新的数据</h3>
+                <button class="settings-close" id="syncConflictClose" aria-label="关闭">&times;</button>
+            </div>
+            <div class="settings-panel__body">
+                <p class="confirm-text" id="syncConflictText">云端数据已被其他设备更新。</p>
+                <div class="sync-conflict-actions">
+                    <button class="settings-btn" id="syncMergeBtn">合并两边并上传</button>
+                    <button class="settings-btn settings-btn--danger" id="syncOverwriteBtn">用本地覆盖云端</button>
+                    <button class="settings-btn settings-btn--secondary" id="syncCancelBtn">取消</button>
+                </div>
+                <div class="sync-conflict-hint">
+                    「合并」会保留两边新增的链接（同一条以本地为准）；「覆盖」会丢掉云端那份，但云端会自动备份上一版，可在设置里恢复。
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ===== 加载覆盖层 ===== -->
     <div id="loadingOverlay" class="loading-overlay is-hidden">
         <div class="loading-content">
@@ -343,6 +376,6 @@
         </div>
     </div>
 
-    <script src="main.js?v=2.3.0" defer></script>
+    <script src="main.js?v=2.3.1" defer></script>
 </body>
 </html>
