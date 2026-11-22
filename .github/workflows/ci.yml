@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check main.js
+          node --check app.js
+          node --check pinyin.js
+          node --check sw.js
+          node --check worker/nav-api.js
+
+      - name: Validate the PWA manifest
+        run: node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8'))"
+
+      - name: Check the asset version
+        run: |
+          node -e "const fs=require('fs');const m=fs.readFileSync('main.js','utf8').match(/APP_VERSION = '([^']+)'/);const h=fs.readFileSync('index.html','utf8');if(!m||!h.includes('?v='+m[1])){console.error('APP_VERSION and ?v= in index.html disagree');process.exit(1)}"
